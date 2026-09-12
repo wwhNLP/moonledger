@@ -24,7 +24,7 @@ API_URL = 'https://api.deepseek.com/chat/completions'
 DEFAULT_MODEL = 'deepseek-flash'
 CATEGORIES = ['餐饮美食', '居家生活', '购物消费', '交通出行', '休闲娱乐', '医疗健康', '学习成长', '其他支出', '工资薪酬', '兼职收入', '投资收益', '其他收入']
 HINTS = ['餐饮', '咖啡', '居家', '房租', '购物', '交通', '娱乐', '健康', '学习', '工资', '兼职', '投资', '收入', '支出', '待确认']
-METRICS = ['income', 'expense', 'balance', 'budget', 'count', 'average', 'difference', 'category', 'remaining']
+METRICS = ['income', 'expense', 'balance', 'budget', 'count', 'days', 'average', 'perEntryAverage', 'difference', 'category', 'remaining']
 FOCUS = ['review', 'total', 'compare', 'average', 'ranking', 'budget']
 MAX_CENTS = 9_000_000_000_000_000
 CSRF_TOKEN = secrets.token_urlsafe(32)
@@ -74,7 +74,14 @@ def clean_request(raw):
             candidates.append({'id': row['id'], 'hints': [choice(x, HINTS) for x in row['hints']], 'typeHint': choice(row['typeHint'], ['income', 'expense', 'unknown'])})
         return {'task': task, 'data': {'candidates': candidates}}
 
-    exact_keys(data, ['focus', 'periods', 'facts', 'category', 'excludeRent', 'measure'])
+    exact_keys(data, ['focus', 'periods', 'facts', 'category', 'excludeRent', 'measure'], ['averageUnit', 'filtered'])
+    context = {}
+    if 'averageUnit' in data:
+        context['averageUnit'] = choice(data['averageUnit'], ['day', 'month', 'entry'])
+    if 'filtered' in data:
+        if type(data['filtered']) is not bool:
+            raise UserError('筛选状态无效。')
+        context['filtered'] = data['filtered']
     measure = choice(data['measure'], ['income', 'expense', 'balance', 'all'])
     focus = choice(data['focus'], FOCUS)
     category = choice(data['category'], ['all'] + CATEGORIES)
@@ -84,7 +91,8 @@ def clean_request(raw):
         raise UserError('分析范围须为 1—24 个月。')
     periods = []
     for i, period in enumerate(data['periods']):
-        exact_keys(period, ['id', 'income', 'expense', 'balance', 'budget', 'count', 'categories'])
+        exact_keys(period, ['id', 'income', 'expense', 'balance', 'budget', 'count', 'categories'], ['days'])
+        calendar = {'days': number(period['days'], minimum=1, maximum=31)} if 'days' in period else {}
         if period['id'] != f'P{i}':
             raise UserError('匿名月份编号无效。')
         income, expense = number(period['income']), number(period['expense'], -MAX_CENTS)
@@ -109,7 +117,9 @@ def clean_request(raw):
         count = number(period['count'], maximum=50000)
         if sum(row['count'] for row in cleaned_categories) != count:
             raise UserError('账单笔数不一致。')
-        periods.append({'id': period['id'], 'income': income, 'expense': expense, 'balance': balance, 'budget': None if period['budget'] is None else number(period['budget']), 'count': count, 'categories': cleaned_categories})
+        periods.append({'id': period['id'], 'income': income, 'expense': expense, 'balance': balance, 'budget': None if period['budget'] is None else number(period['budget']), 'count': count, 'categories': cleaned_categories, **calendar})
+    if focus == 'average' and context.get('averageUnit') == 'day' and any('days' not in p for p in periods):
+        raise UserError('日均分析缺少计算天数。')
     if not isinstance(data['facts'], list) or not 1 <= len(data['facts']) <= 16:
         raise UserError('分析依据无效。')
     facts = []
@@ -117,8 +127,8 @@ def clean_request(raw):
         exact_keys(row, ['id', 'metric', 'value', 'unit', 'periodId', 'category'])
         if row['id'] != f'F{i}' or row['periodId'] not in [p['id'] for p in periods] + ['all']:
             raise UserError('分析依据编号无效。')
-        facts.append({'id': row['id'], 'metric': choice(row['metric'], METRICS), 'value': number(row['value'], -MAX_CENTS), 'unit': choice(row['unit'], ['cents', 'count']), 'periodId': row['periodId'], 'category': choice(row['category'], ['all'] + CATEGORIES)})
-    return {'task': task, 'data': {'focus': focus, 'periods': periods, 'facts': facts, 'category': category, 'excludeRent': data['excludeRent'], 'measure': measure}}
+        facts.append({'id': row['id'], 'metric': choice(row['metric'], METRICS), 'value': number(row['value'], -MAX_CENTS), 'unit': choice(row['unit'], ['cents', 'count', 'days']), 'periodId': row['periodId'], 'category': choice(row['category'], ['all'] + CATEGORIES)})
+    return {'task': task, 'data': {'focus': focus, 'periods': periods, 'facts': facts, 'category': category, 'excludeRent': data['excludeRent'], 'measure': measure, **context}}
 
 
 def read_config():
@@ -183,9 +193,10 @@ def prompt_for(payload):
                 '每个输入ID恰好输出一次；type只能income/expense。已明确的typeHint必须保留；unknown需保守选择。'
                 '收入分类只能' + '、'.join(CATEGORIES[8:]) + '；支出分类只能' + '、'.join(CATEGORIES[:8]) + '。')
     return ('你是谨慎的个人收支复盘助手。输入仅为脱敏汇总，金额单位分，P0是所选参考月，之后是更早月份。'
-            'focus为用户在本地解析后的问题类型：total合计、compare比较、average月平均、ranking消费排行、budget预算、review月复盘。measure表示关注收入、支出、结余还是全部。只解读相关指标；若只查询支出，income为零不代表没有收入。'
+            'focus为用户在本地确认后的问题类型：total合计、compare比较、average平均、ranking消费排行、budget预算、review复盘。averageUnit表示平均口径：day日均、month月均、entry笔均，缺省为月均。日均用periods.days中的日历天数，包含零消费日；当月截至今天，其他月份按整月。笔均按筛选记录数，包含回款记录。平均值和总额均以facts为准，不把日均说成月均。'
+            'filtered为true时已在本机按分类、收支类型、备注或单笔金额等条件筛选，只代表匹配记录，不代表完整账本，不推测被隐藏的筛选原文。不能因为只看到餐饮就称餐饮是全账本唯一消费；不能根据净支出推断没有退款。perEntryAverage是本地计算的笔均，可与日均区分说明。measure表示关注收入、支出、结余还是全部。只解读相关指标；若只查询支出，income为零不代表没有收入。'
             'expense及支出分类均为到账月净支出：退款和报销冲减支出，负数表示收回金额超过当月消费；内部转账不计收支。没有原始账单，不得假定交易内容、商户、姓名、职业或具体生活事件。相邻月份可能一个尚未结束，不能简单认定消费习惯改善。'
-            '数字与金额由应用显示，你的所有自然语言字段不要含阿拉伯数字、百分数或中文金额，不自行计算。'
+            '数字与金额已由应用计算。可以引用facts中已有的平均值、总额、天数或笔数；金额单位分，显示时换算成元，使用阿拉伯数字。除单位换算外不要自行计算，不编造节省金额、频次、占比或百分数。匿名编号用来定位依据，优先在insights.factId中引用。'
             '仅解释已给事实，原因只能写成可核对的可能性，不下定论，不提供投资买卖建议。无记录不代表没有真实收支。'
             '必须输出 JSON：{"summary":"简短解读","insights":[{"factId":"F0","explanation":"依据说明"}],"suggestions":["可操作的核对建议"]}。'
             'summary最多180字，insights最多4项且factId必须来自输入facts，suggestions最多3项，每项最多100字。')
@@ -210,13 +221,42 @@ def validate_result(result, payload):
         return result
 
     exact_keys(result, ['summary', 'insights', 'suggestions'])
+    # Permit grounded numbers, instead of rejecting an otherwise valid answer
+    # simply because it repeats the locally computed daily average.
+    money_numbers = {abs(row['value'] / 100) for row in payload['data']['facts'] if row['unit'] == 'cents'}
+    count_numbers = {abs(row['value']) for row in payload['data']['facts'] if row['unit'] != 'cents'}
+    for period in payload['data']['periods']:
+        money_numbers.update(abs(period[key] / 100) for key in ['income', 'expense', 'balance', 'budget'] if period[key] is not None)
+        count_numbers.add(period['count'])
+        if 'days' in period:
+            count_numbers.add(period['days'])
+        money_numbers.update(abs(row['amount'] / 100) for row in period['categories'])
+    allowed_numbers = money_numbers | count_numbers
+    known_ids = {row['id'] for row in payload['data']['facts']} | {row['id'] for row in payload['data']['periods']}
     def text(value, limit):
         if not isinstance(value, str) or not value.strip() or len(value) > limit:
             raise UserError('AI 返回内容不完整，请重试。', 502, 'AI_RESPONSE')
-        if re.search(r'[\d¥￥]|[一二三四五六七八九十百千万亿]+\s*(?:元|％|%)', value):
-            raise UserError('AI 返回了无法核对的数字，已隐藏该结果。可重试，准确金额仍显示在本地依据中。', 502, 'AI_RESPONSE')
+        checked = re.sub(r'(?<![A-Za-z0-9])[FP]\d+(?!\d)', lambda match: '' if match.group() in known_ids else match.group(), value)
+        invalid = False
+        for match in re.finditer(r'[¥￥]?\s*\d+(?:,\d{3})*(?:\.\d+)?', checked):
+            token = match.group().strip()
+            monetary = token.startswith(('¥', '￥')) or re.match(r'\s*(?:元|块|人民币)', checked[match.end():])
+            number_value = float(token.lstrip('¥￥').strip().replace(',', ''))
+            invalid |= number_value not in (money_numbers if monetary else allowed_numbers)
+        if invalid or re.search(r'\d\s*[％%]|[零一二三四五六七八九十百千万亿]+\s*(?:元|％|%)', checked):
+            raise UserError('AI 文本含有无法核对的推算。', 502, 'AI_UNGROUNDED')
         return value.strip()
-    summary = text(result['summary'], 500)
+    omitted = False
+    def grounded(value, limit):
+        nonlocal omitted
+        try:
+            return text(value, limit)
+        except UserError as error:
+            if error.code != 'AI_UNGROUNDED':
+                raise
+            omitted = True
+            return None
+    summary = grounded(result['summary'], 500) or '统计结果已在本地核对，可查看下方金额与计算口径。'
     if not isinstance(result['insights'], list) or len(result['insights']) > 4 or not isinstance(result['suggestions'], list) or len(result['suggestions']) > 3:
         raise UserError('AI 响应结构不正确。', 502, 'AI_RESPONSE')
     facts = {row['id'] for row in payload['data']['facts']}
@@ -225,8 +265,11 @@ def validate_result(result, payload):
         exact_keys(row, ['factId', 'explanation'])
         if row['factId'] not in facts:
             raise UserError('AI 引用了不存在的依据。', 502, 'AI_RESPONSE')
-        insights.append({'factId': row['factId'], 'explanation': text(row['explanation'], 350)})
-    return {'summary': summary, 'insights': insights, 'suggestions': [text(s, 200) for s in result['suggestions']]}
+        explanation = grounded(row['explanation'], 350)
+        if explanation:
+            insights.append({'factId': row['factId'], 'explanation': explanation})
+    suggestions = [value for s in result['suggestions'] if (value := grounded(s, 200))]
+    return {'summary': summary, 'insights': insights, 'suggestions': suggestions, **({'omittedNumericText': True} if omitted else {})}
 
 
 def call_deepseek(payload):

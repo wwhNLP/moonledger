@@ -3,7 +3,7 @@
   const L = root.Ledger || require('./ledger.js');
   const money = n => (n / 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const aliases = {
-    '餐饮美食': /餐饮|吃饭|午饭|晚饭|早饭|早餐|午餐|晚餐|外卖|奶茶|咖啡|日料|聚餐|火锅/,
+    '餐饮美食': /餐饮|伙食费|伙食|饭钱|饭费|吃喝|饮食|用餐|吃饭|午饭|晚饭|早饭|早餐|午餐|晚餐|外卖|奶茶|咖啡|日料|聚餐|火锅/,
     '居家生活': /居家|房租|水电|电费|水费|网费|网络|物业|日用品|燃气/,
     '购物消费': /购物|买衣|衣服|鞋|网购|手机|电脑|耳机|超市/,
     '交通出行': /交通|打车|地铁|公交|通勤|高铁|机票|停车|加油|出租车/,
@@ -18,56 +18,72 @@
 
   function parseQuestion(text, anchor) {
     if (!L.validMonth(anchor)) throw Error('请先选择有效月份。');
-    text = String(text).trim();
+    text = String(text).trim().replace(/(\d+(?:\.\d{1,2})?)\s*(?:元|块)\s*(以上|以下)/g, (_, value, op) => (op === '以上' ? '至少' : '至多') + value + '元');
     if (!text || text.length > 600) throw Error('请输入 1—600 字的问题。');
-    if (!/收支|收入|支出|消费|结余|花|预算|多少|平均|复盘|分析|变化|对比|比较|餐饮|购物|交通|居家|娱乐|医疗|学习|工资|兼职|理财/.test(text)) {
-      throw Error('为避免发送原文，目前支持按月份、分类查收支。可以使用下面的快捷问题。');
-    }
-    if (/手机号|身份证|银行卡|账号|姓名|商户|订单号|转给|转账给/.test(text)) {
-      throw Error('当前隐私模式不按姓名、商户或账号查账。请使用月份、分类和收支金额提问。');
-    }
-    if (/(?:超过|大于|小于|至少|至多|以上|以下|高于|低于|[><≥≤])\s*(?:\d|[一二三四五六七八九十])|\d+(?:\.\d+)?\s*(?:元|块)/.test(text)) {
-      throw Error('当前暂不支持金额门槛筛选。请使用月份与标准分类提问，避免查询范围被误解。');
-    }
-    if ([...text.matchAll(/(?:19\d{2}|20\d{2}|2100)年\s*\d{1,2}月/g)].length > 1) {
-      throw Error('一次请指定一个参考月，或使用“最近几个月”。跨指定月份的比较请先调整参考月。');
-    }
-    let focus = /预算|超支|剩余额度/.test(text) ? 'budget' : /平均|月均/.test(text) ? 'average' : /最多|最大|排行|哪里|哪类/.test(text) ? 'ranking' : /较|比|变化|增加|减少|为什么/.test(text) ? 'compare' : /复盘|分析/.test(text) ? 'review' : 'total';
+    const averageUnit = /每天|每日|日均|一天/.test(text) ? 'day' : /每笔|每次|笔均|单笔平均/.test(text) ? 'entry' : 'month';
+    const focus = /预算|超支|剩余额度/.test(text) ? 'budget' : /平均|月均|日均|笔均|每天|每日|每笔|每次/.test(text) ? 'average' : /最多|最大|排行|哪里|哪类/.test(text) ? 'ranking' : /对比|比较|相比|比上|变化|增加|减少|为什么/.test(text) ? 'compare' : /复盘|分析|合理|建议|节省/.test(text) ? 'review' : 'total';
     let count = focus === 'compare' ? 2 : 1;
-    const numerals = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十二: 12 };
-    const range = text.match(/(?:最近|近|过去)\s*(\d{1,2}|十二|[一二两三四五六七八九十])\s*个?月/);
+    const numerals = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10, 十一: 11, 十二: 12 };
+    const rangePattern = /(?:最近|近|过去)\s*(\d{1,2}|十二|十一|[一二两三四五六七八九十])\s*个?月/g;
+    const range = [...text.matchAll(rangePattern)][0];
     if (range) count = Number(range[1]) || numerals[range[1]];
     if (/半年/.test(text)) count = 6;
     let end = anchor;
-    if (/上个月|上月/.test(text) && !/比|较|对比|比较/.test(text)) end = L.shiftMonth(anchor, -1);
-    if (/今年/.test(text)) { end = anchor; count = Number(anchor.slice(5)); }
+    if (/上个月|上月/.test(text) && focus !== 'compare') end = L.shiftMonth(anchor, -1);
+    if (/今年/.test(text)) count = Number(anchor.slice(5));
     if (/去年/.test(text)) { end = `${Number(anchor.slice(0, 4)) - 1}-12`; count = 12; }
-    const explicit = text.match(/(19\d{2}|20\d{2}|2100)年\s*(\d{1,2})月/);
-    if (explicit) { end = `${explicit[1]}-${explicit[2].padStart(2, '0')}`; count = 1; }
+    const explicitPattern = /(?:(19\d{2}|20\d{2}|2100)年\s*)?(\d{1,2})月/g;
+    const explicit = [...text.replace(rangePattern, '').matchAll(explicitPattern)].map(m => `${m[1] || anchor.slice(0, 4)}-${m[2].padStart(2, '0')}`);
+    if (explicit.some(m => !L.validMonth(m))) throw Error('请检查指定月份。');
+    if (explicit.length) { end = explicit[0]; count = focus === 'compare' ? 2 : 1; }
+    let months = explicit.length > 1 ? [...new Set(explicit)].sort().reverse() : null;
+    if (months && /至|到|~|～/.test(text)) {
+      end = months[0];
+      const start = months.at(-1);
+      count = (Number(end.slice(0, 4)) - Number(start.slice(0, 4))) * 12 + Number(end.slice(5)) - Number(start.slice(5)) + 1;
+      months = null;
+    }
     if (!Number.isInteger(count) || count < 1 || count > 24 || !L.validMonth(end)) throw Error('一次可分析 1—24 个月，请检查时间范围。');
-    const excludeRent = /(?:去掉|不算|不含|扣除|除去)\s*房租/.test(text);
-    let category = 'all';
-    const categoryText = excludeRent ? text.replace(/(?:去掉|不算|不含|扣除|除去)\s*房租/g, '') : text;
-    for (const cat of Object.values(L.categories).flat()) {
-      if (categoryText.includes(cat) || (aliases[cat] && aliases[cat].test(categoryText))) { category = cat; break; }
-    }
-    if (/外卖|咖啡|房租/.test(categoryText)) {
-      throw Error('当前 AI 问答按标准分类汇总，不单独统计备注中的外卖、咖啡或房租。可改问“餐饮”或在账单明细中搜索。');
-    }
-    let residue = text.replace(/(?:去掉|不算|不含|扣除|除去)\s*房租/g, '').replace(/(?:19\d{2}|20\d{2}|2100)年\s*\d{1,2}月/g, '').replace(/(?:最近|近|过去)\s*(?:\d{1,2}|十二|[一二两三四五六七八九十])\s*个?月/g, '');
-    for (const cat of Object.values(L.categories).flat()) residue = residue.replaceAll(cat, '');
-    for (const pattern of Object.values(aliases)) residue = residue.replace(new RegExp(pattern.source, 'g'), '');
-    residue = residue.replace(/这个月|上个月|本月|上月|今年|去年|半年|收支|收入|支出|消费|结余|预算|超支|剩余额度|平均|月均|最多|最大|排行|哪里|哪类|哪些分类|分类|变化|增加|减少|为什么|对比|比较|复盘|分析|合计|总共|一共|多少|花费|花了|花得|花|能不能|能否|帮我|请问|看看|看一下|一下|帮|请|我的|我|的|了|得|比|较|多|少|钱|是|有|和|与|吗|呢|每月|每个月|共|全部|最近|过去|这些/g, '').replace(/[\s，,。.?？!！、：:；;（）()「」“”]/g, '');
-    if (residue) throw Error('问题里包含暂未支持的条件。为避免扩大查询范围，请改用下面的快捷问题或标准分类。');
-    const measure = /结余/.test(text) ? 'balance' : /收入/.test(text) && !/支出|消费|花|收支/.test(text) ? 'income' : /支出|消费|花|预算/.test(text) ? 'expense' : 'all';
-    const months = Array.from({ length: count }, (_, i) => L.shiftMonth(end, -i));
-    if (months.some(m => !L.validMonth(m))) throw Error('月份超出可分析范围。');
-    return { focus, months, category, excludeRent, measure };
+    months ||= Array.from({ length: count }, (_, i) => L.shiftMonth(end, -i));
+    if (months.length > 24 || months.some(m => !L.validMonth(m))) throw Error('月份超出可分析范围。');
+    const excludePattern = /(?:去掉|不算|不含|扣除|除去|排除)\s*房租/g;
+    const excludeRent = /(?:去掉|不算|不含|扣除|除去|排除)\s*房租/.test(text);
+    let rest = text.replace(excludePattern, '').replace(rangePattern, '').replace(explicitPattern, '');
+    const bounds = [];
+    rest = rest.replace(/(超过|大于|小于|至少|至多|不低于|不高于|高于|低于|>=|<=|>|<|≥|≤)\s*(\d+(?:\.\d{1,2})?)\s*(?:元|块)?/g, (_, op, value) => {
+      const amount = Math.round(Number(value) * 100);
+      if (!Number.isSafeInteger(amount) || amount < 0 || amount > 99999999999) throw Error('金额筛选超出范围。');
+      bounds.push({ op: /至少|不低于|>=|≥/.test(op) ? 'gte' : /至多|不高于|<=|≤/.test(op) ? 'lte' : /超过|大于|高于|>/.test(op) ? 'gt' : 'lt', amount });
+      return '';
+    });
+    const categories = Object.values(L.categories).flat().filter(cat => rest.includes(cat) || aliases[cat]?.test(rest));
+    // Specific items and quoted names stay local: filtering precedes anonymous aggregation.
+    const quoted = [...rest.matchAll(/[“「"]([^”」"]+)[”」"]/g)].map(m => m[1]);
+    const specific = (rest.match(/外卖|咖啡|奶茶|房租|早餐|午餐|晚餐|早饭|午饭|晚饭/g) || []);
+    let noteKeyword = quoted.join(' ') || [...new Set(specific)].join(' ');
+    rest = rest.replace(/[“「"][^”」"]+[”」"]/g, '');
+    for (const cat of Object.values(L.categories).flat()) rest = rest.replaceAll(cat, '');
+    for (const pattern of Object.values(aliases)) rest = rest.replace(new RegExp(pattern.source, 'g'), '');
+    rest = rest.replace(/这个月|上个月|本月|上月|今年|去年|半年|收支|收入|支出|消费|结余|预算|超支|剩余额度|单笔平均|平均|月均|日均|笔均|每天|每日|一天|每笔|每次|最多|最大|排行|哪里|哪类|哪些分类|分类|变化|增加|减少|为什么|对比|比较|相比|复盘|分析|合计|总共|一共|多少|花费|花了|花得|花|开销|开支|算一下|计算|统计|查询|查一下|查查|算|能不能|可不可以|能否|可以|帮我|请问|询问|告诉我|想知道|想了解|想问|我想|看看|看一下|一下|帮|请|我的|我|的|了|得|比|较|多|少|钱|是|有|和|与|吗|呢|每个月|每月|共|全部|最近|过去|这些|合理|建议|节省|怎么样|如何|商户|备注|包含|含有|关键词|在|去|给|为|到|至|大概|大约/g, '').replace(/[\s，,。.?？!！、：:；;（）()「」“”~～]/g, '');
+    const warning = rest ? '有未完全识别的内容，已填入本地备注关键词；请核对下方条件，可修改后重新统计。' : '';
+    if (rest) noteKeyword = [noteKeyword, rest].filter(Boolean).join(' ');
+    const category = categories.length === 1 ? categories[0] : 'all';
+    const measure = /结余/.test(text) ? 'balance' : /收支|收入.*支出|支出.*收入/.test(text) ? 'all' : /收入/.test(text) ? 'income' : /支出|消费|开销|开支|花|预算/.test(text) || categories.some(c => L.categories.expense.includes(c)) || noteKeyword ? 'expense' : categories.some(c => L.categories.income.includes(c)) ? 'income' : 'all';
+    return { focus, months, category, categories, excludeRent, measure, averageUnit, noteKeyword, bounds, warning };
   }
 
-  function packet(book, anchor, query = { focus: 'review', months: Array.from({ length: 6 }, (_, i) => L.shiftMonth(anchor, -i)), category: 'all', excludeRent: false }) {
+  function packet(book, anchor, query = { focus: 'review', months: Array.from({ length: 6 }, (_, i) => L.shiftMonth(anchor, -i)), category: 'all', excludeRent: false }, today = L.localDate()) {
     const measure = query.measure || 'all';
-    const selectedRows = L.accountingEntries(book).filter(e => query.months.includes(e.date.slice(0, 7)) && (query.category === 'all' || e.category === query.category) && (!query.excludeRent || !/房租/.test(e.note)) && (!['income', 'expense'].includes(measure) || e.type === measure));
+    const averageUnit = query.averageUnit || 'month';
+    const isDaily = query.focus === 'average' && averageUnit === 'day';
+    const daysIn = month => new Date(Number(month.slice(0, 4)), Number(month.slice(5)), 0).getDate();
+    const dayCount = month => isDaily && month === today.slice(0, 7) ? Number(today.slice(8)) : daysIn(month);
+    const keywords = String(query.noteKeyword || '').trim().split(/\s+/).filter(Boolean);
+    const bounds = query.bounds || [];
+    const partialFilter = !!(keywords.length || bounds.length || query.excludeRent);
+    const filtered = !!(partialFilter || query.category !== 'all' || query.categories?.length || measure !== 'all');
+    const categoryMatches = e => query.categories?.length ? query.categories.includes(e.category) : query.category === 'all' || e.category === query.category;
+    const selectedRows = L.accountingEntries(book).filter(e => query.months.includes(e.date.slice(0, 7)) && categoryMatches(e) && (!query.excludeRent || !/房租/.test(e.note)) && (!['income', 'expense'].includes(measure) || e.type === measure) && keywords.every(k => e.note.toLocaleLowerCase().includes(k.toLocaleLowerCase())) && bounds.every(b => ({ gt: Math.abs(e.amount) > b.amount, gte: Math.abs(e.amount) >= b.amount, lt: Math.abs(e.amount) < b.amount, lte: Math.abs(e.amount) <= b.amount })[b.op]) && (!isDaily || e.date.slice(0, 7) !== today.slice(0, 7) || e.date <= today));
     const selectedIds = new Set(selectedRows.map(e => e.id));
     const periods = query.months.map((month, i) => {
       const rows = selectedRows.filter(e => e.date.startsWith(month));
@@ -77,23 +93,32 @@
         const matches = rows.filter(e => e.category === category);
         return { category, amount: matches.reduce((s, e) => s + e.amount, 0), count: matches.length };
       }).filter(c => c.count);
-      return { id: `P${i}`, income, expense, balance: income - expense, budget: !query.excludeRent ? (query.category === 'all' ? book.budgets[month] : book.categoryBudgets?.[month]?.[query.category]) || null : null, count: rows.length, categories };
+      return { id: `P${i}`, income, expense, balance: income - expense, budget: !partialFilter && !(query.categories?.length > 1) ? (query.category === 'all' ? book.budgets[month] : book.categoryBudgets?.[month]?.[query.category]) || null : null, count: rows.length, categories, ...(isDaily ? { days: dayCount(month) } : {}) };
     });
     const facts = [], labels = {};
     const add = (metric, value, title, periodId = 'P0', category = 'all', unit = 'cents') => {
       const id = `F${facts.length}`;
       facts.push({ id, metric, value, unit, periodId, category });
-      labels[id] = { title, display: unit === 'cents' ? `¥${money(value)}` : `${value} 笔` };
+      labels[id] = { title, display: unit === 'cents' ? `¥${money(value)}` : `${value} ${unit === 'days' ? '天' : '笔'}` };
     };
     const p = periods[0], total = key => periods.reduce((s, row) => s + row[key], 0);
     if (query.focus === 'average') {
-      if (measure !== 'income') add('average', Math.round(total('expense') / periods.length), '月均支出（包含无记录月份）', 'all', query.category);
-      if (measure !== 'expense') add('average', Math.round(total('income') / periods.length), '月均收入（包含无记录月份）', 'all', query.category);
+      const keys = measure === 'all' ? ['expense', 'income'] : [measure];
+      for (const key of keys) {
+        const denominator = isDaily ? total('days') : averageUnit === 'entry' ? selectedRows.filter(e => key === 'balance' || e.type === key).length : periods.length;
+        const name = { expense: '净支出', income: '收入', balance: '结余' }[key];
+        const title = `${{ day: '日均', month: '月均', entry: '笔均' }[averageUnit]}${name}${averageUnit === 'entry' ? '（按筛选记录，含回款）' : '（包含无记录' + (isDaily ? '日期' : '月份') + '）'}`;
+        add('average', denominator ? Math.round(total(key) / denominator) : 0, title, 'all', query.category);
+        add(key, total(key), `范围内${name}`, 'all', query.category);
+        const records = selectedRows.filter(e => key === 'balance' || e.type === key).length;
+        if (averageUnit !== 'entry' && records) add('perEntryAverage', Math.round(total(key) / records), `笔均${name}（按筛选记录，含回款）`, 'all', query.category);
+      }
+      if (isDaily) add('days', total('days'), '日均计算天数', 'all', query.category, 'days');
     } else if (query.focus === 'compare' && periods.length >= 2) {
       const metric = measure === 'income' ? 'income' : measure === 'balance' ? 'balance' : 'expense';
       const name = { income: '收入', expense: '支出', balance: '结余' }[metric];
       add(metric, p[metric], `较新月份${name}`, 'P0', query.category);
-      add(metric, periods[1][metric], `前一个月${name}`, 'P1', query.category);
+      add(metric, periods[1][metric], `对比月份${name}`, 'P1', query.category);
       add('difference', p[metric] - periods[1][metric], `${name}差额（正数为增加）`, 'P0', query.category);
     } else if (query.focus === 'budget') {
       add('expense', p.expense, '参考月净支出');
@@ -109,7 +134,7 @@
     const top = L.categories.expense.map(category => ({ category, amount: categoryPeriods.reduce((s, period) => s + (period.categories.find(c => c.category === category)?.amount || 0), 0) })).filter(c => c.amount > 0).sort((a, b) => b.amount - a.amount).slice(0, 4);
     for (const row of top) add('category', row.amount, row.category, query.focus === 'review' ? 'P0' : 'all', row.category);
     add('count', query.focus === 'review' ? p.count : total('count'), '参与统计账单数', query.focus === 'review' ? 'P0' : 'all', query.category, 'count');
-    return { payload: { task: query.focus === 'review' ? 'review' : 'question', data: { focus: query.focus, periods, facts, category: query.category, excludeRent: query.excludeRent, measure } }, labels, months: query.months, query, sourceRows: book.entries.filter(e => selectedIds.has(e.id)), scope: `${query.months.at(-1)} 至 ${query.months[0]} · ${query.category === 'all' ? '全部分类' : query.category} · ${{ income: '收入', expense: '支出', balance: '结余', all: '收支' }[measure]}${query.excludeRent ? ' · 排除备注含“房租”的记录' : ''}` };
+    return { payload: { task: query.focus === 'review' ? 'review' : 'question', data: { focus: query.focus, periods, facts, category: query.category, excludeRent: !!query.excludeRent, measure, averageUnit, filtered } }, labels, months: query.months, query, sourceRows: book.entries.filter(e => selectedIds.has(e.id)), scope: `${[...query.months].reverse().join('、')} · ${query.categories?.length ? query.categories.join('、') : query.category === 'all' ? '全部分类' : query.category} · ${{ income: '收入', expense: '支出', balance: '结余', all: '收支' }[measure]}${query.excludeRent ? ' · 排除备注含“房租”的记录' : ''}${keywords.length ? ' · 备注同时包含：' + keywords.join('、') : ''}${bounds.length ? ' · 单笔金额绝对值' + bounds.map(b => ({ gt: '>', gte: '≥', lt: '<', lte: '≤' })[b.op] + '¥' + money(b.amount)).join('且') : ''}${isDaily ? ' · 日均含零消费日；本月截至今天，历史及未来月份按整月' : ''}` };
   }
 
   function redactIdentifiers(text) {

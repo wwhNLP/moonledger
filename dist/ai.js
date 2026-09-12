@@ -2,7 +2,7 @@
   'use strict';
   const P = window.MoonPrivacy;
   const ai = { status: null, tab: 'review', prepared: null, response: null, error: '', busy: false, controller: null, cache: new Map(), question: '', mode: state.mode, drafts: [], smartMode: null, saving: false, smartBusy: false };
-  const shortcuts = ['这个月为什么比上个月花得多？', '最近三个月餐饮平均花多少？', '本月哪些分类花得最多？', '去掉房租，这个月花了多少？'];
+  const shortcuts = ['平均每天的伙食支出是多少？', '最近三个月餐饮月均花多少？', '本月咖啡花了多少钱？', '本月超过100元的支出有多少？'];
   const assistant = document.createElement('dialog');
   assistant.id = 'ai-dialog'; assistant.className = 'ai-drawer'; assistant.setAttribute('aria-labelledby', 'ai-title');
   assistant.innerHTML = `<div class="ai-drawer-head"><div class="ai-title-icon">${icon('sparkles')}</div><div><h2 id="ai-title">AI 财务助手</h2><p>给数字一点解释，给生活一点方向</p></div><button class="icon-button" data-ai-action="settings" aria-label="AI 设置">${icon('wallet')}</button><button class="icon-button close-dialog" aria-label="关闭财务助手">${icon('x')}</button></div><div id="ai-body"></div>`;
@@ -48,25 +48,32 @@
 
   function privacyPreview(payload) {
     const isCategorize = payload.task === 'categorize';
-    return `<details class="ai-payload"><summary>${icon('shield')}查看实际发送的脱敏内容</summary><p>${isCategorize ? '仅发送匿名编号和白名单分类提示，不发送金额、日期、姓名、账号或原文。' : '仅发送匿名月份、分类汇总、金额（单位：分）、预算及计算结果。不包含账单明细、绝对日期、商户、备注或提问原文。'}数据将发送至 DeepSeek 官方 API。</p><pre>${esc(JSON.stringify(payload.data, null, 2))}</pre></details>`;
+    return `<details class="ai-payload"><summary>${icon('shield')}查看实际发送的脱敏内容</summary><p>${isCategorize ? '仅发送匿名编号和白名单分类提示，不发送金额、日期、姓名、账号或原文。' : '仅发送匿名月份、分类汇总、金额（单位：分）、统计天数、平均口径、预算及计算结果。不包含账单明细、绝对日期、商户、备注或提问原文。'}数据将发送至 DeepSeek 官方 API。</p><pre>${esc(JSON.stringify(payload.data, null, 2))}</pre></details>`;
   }
   function localFacts(prepared) {
     return `<div class="ai-facts">${prepared.payload.data.facts.map(f => `<div><span>${esc(prepared.labels[f.id].title)}</span><strong>${esc(prepared.labels[f.id].display)}</strong></div>`).join('')}</div>`;
   }
   function resultHTML(prepared, response) {
     const result = response.result;
-    return `<section class="ai-result"><div class="ai-section-label">AI 解读 <span>金额由本地程序计算</span></div><h3>${esc(result.summary)}</h3><div class="ai-insights">${result.insights.map(item => { const fact = prepared.labels[item.factId]; return `<article><div class="ai-fact-reference">${esc(fact.title)} <strong>${esc(fact.display)}</strong></div><p>${esc(item.explanation)}</p></article>`; }).join('')}</div>${result.suggestions.length ? `<div class="ai-suggestions"><strong>可以从这些小事开始</strong>${result.suggestions.map(t => `<p>${icon('leaf')}${esc(t)}</p>`).join('')}</div>` : ''}<div class="ai-result-actions"><button class="text-button" data-ai-action="copy-report">${icon('list')}复制复盘</button><button class="text-button" data-ai-action="regenerate">重新生成</button></div><p class="ai-footnote">AI 解释供你核对。账单不完整时，结论也可能不完整。</p></section>`;
+    return `<section class="ai-result"><div class="ai-section-label">AI 解读 <span>金额由本地程序计算</span></div><h3>${esc(result.summary)}</h3><div class="ai-insights">${result.insights.map(item => { const fact = prepared.labels[item.factId]; return `<article><div class="ai-fact-reference">${esc(fact.title)} <strong>${esc(fact.display)}</strong></div><p>${esc(item.explanation)}</p></article>`; }).join('')}</div>${result.omittedNumericText ? '<p class="ai-footnote">部分无法核对的额外推算已省略；已保留可核对的解读，本地统计不受影响。</p>' : ''}${result.suggestions.length ? `<div class="ai-suggestions"><strong>可以从这些小事开始</strong>${result.suggestions.map(t => `<p>${icon('leaf')}${esc(t)}</p>`).join('')}</div>` : ''}<div class="ai-result-actions"><button class="text-button" data-ai-action="copy-report">${icon('list')}复制复盘</button><button class="text-button" data-ai-action="regenerate">重新生成</button></div><p class="ai-footnote">AI 解释供你核对。账单不完整时，结论也可能不完整。</p></section>`;
   }
   function sourceRows(prepared) {
     const rows = [...prepared.sourceRows].sort((a, b) => b.date.localeCompare(a.date));
     return `<details class="ai-source-rows"><summary>本地依据 · ${rows.length} 笔账单（不会发送）</summary><p>下列明细只在此设备显示；最多展示最近 50 笔。</p>${rows.slice(0, 50).map(e => `<div><span><strong>${esc(e.note || e.category)}</strong><small>${e.date} · ${e.category}</small></span><b>${e.type === 'income' ? '+' : '−'}${fmt(e.amount)}</b></div>`).join('')}</details>`;
   }
+  function queryEditor(prepared) {
+    const q = prepared.query;
+    const options = (values, current) => Object.entries(values).map(([value, label]) => `<option value="${esc(value)}" ${value === current ? 'selected' : ''}>${esc(label)}</option>`).join('');
+    const categoryOptions = { all: '全部分类', ...(q.categories?.length > 1 ? { selected: q.categories.join('、') } : {}), ...Object.fromEntries(Object.values(L.categories).flat().map(c => [c, c])) };
+    const lower = q.bounds?.find(b => ['gt', 'gte'].includes(b.op)), upper = q.bounds?.find(b => ['lt', 'lte'].includes(b.op));
+    return `<details class="ai-query-editor" ${q.warning ? 'open' : ''}><summary>调整统计条件 · 仅在本机处理</summary>${q.warning ? `<p class="ai-footnote">${esc(q.warning)}</p>` : ''}<form id="ai-query-form"><div class="ai-query-grid"><label class="field ai-query-wide">统计月份（用逗号分隔，最多 24 个月）<input name="months" value="${esc(q.months.join(', '))}" required></label><label class="field">分类<select name="category">${options(categoryOptions, q.categories?.length > 1 ? 'selected' : q.category)}</select></label><label class="field">关注指标<select name="measure">${options({ expense: '净支出', income: '收入', balance: '结余', all: '收支' }, q.measure)}</select></label><label class="field">分析方式<select name="focus">${options({ total: '合计', average: '平均', compare: '两个月比较', ranking: '分类排行', budget: '预算', review: '复盘' }, q.focus)}</select></label><label class="field">平均口径<select name="averageUnit">${options({ day: '每天（含零消费日）', month: '每月（含无记录月份）', entry: '每笔记录（含回款）' }, q.averageUnit || 'month')}</select></label><label class="field ai-query-wide">备注关键词（仅本地；空格表示同时包含）<input name="noteKeyword" maxlength="600" value="${esc(q.noteKeyword || '')}" placeholder="例如 星巴克；留空统计全部匹配分类"></label><label class="field">单笔最低金额（元）<select name="lowerOp" aria-label="最低金额条件">${options({ gte: '大于等于', gt: '大于' }, lower?.op || 'gte')}</select><input name="lower" aria-label="单笔最低金额（元）" type="number" min="0" max="999999999.99" step="0.01" value="${lower ? lower.amount / 100 : ''}" placeholder="不限"></label><label class="field">单笔最高金额（元）<select name="upperOp" aria-label="最高金额条件">${options({ lte: '小于等于', lt: '小于' }, upper?.op || 'lte')}</select><input name="upper" aria-label="单笔最高金额（元）" type="number" min="0" max="999999999.99" step="0.01" value="${upper ? upper.amount / 100 : ''}" placeholder="不限"></label><label class="ai-query-wide"><input type="checkbox" name="excludeRent" ${q.excludeRent ? 'checked' : ''}> 排除备注包含“房租”的记录</label></div><p id="ai-query-error" class="form-error" role="alert"></p><button class="button secondary" type="submit">应用条件，重新统计</button></form></details>`;
+  }
   function renderAssistant() {
     const prepared = ai.prepared;
-    $('#ai-body').innerHTML = `<div class="ai-drawer-content"><div class="ai-privacy-strip">${icon('shield')}默认脱敏 · 原始账单留在本机<span>${state.mode === 'demo' ? '示例账本' : '我的账本'}</span></div><div class="ai-tabs" role="tablist" aria-label="财务助手功能"><button role="tab" aria-selected="${ai.tab === 'review'}" class="${ai.tab === 'review' ? 'active' : ''}" data-ai-action="tab-review">月度复盘</button><button role="tab" aria-selected="${ai.tab === 'question'}" class="${ai.tab === 'question' ? 'active' : ''}" data-ai-action="tab-question">问问账本</button></div>${ai.tab === 'question' ? `<div class="ai-question-box"><label for="ai-question">想了解哪些收支变化？</label><textarea id="ai-question" rows="3" maxlength="600" placeholder="最近三个月餐饮平均花多少？">${esc(ai.question)}</textarea><div class="ai-shortcuts">${shortcuts.map((q, i) => `<button data-ai-shortcut="${i}">${q}</button>`).join('')}</div><div class="ai-question-bottom"><span>相对月份以 ${state.month} 为基准</span><button class="button secondary" data-ai-action="prepare" ${ai.busy ? 'disabled' : ''}>在本地理解问题</button></div></div>` : `<div class="ai-intro"><span class="eyebrow">YOUR MONTH, UNDERSTOOD</span><h3>${monthLabel(state.month)} · 财务复盘</h3><p>收入、支出、预算与消费分类，一起看看这个月的变化。</p></div>`}${ai.error ? `<p class="ai-error" role="alert">${esc(ai.error)}</p>` : ''}${prepared ? `<div class="ai-scope"><span>本次分析范围</span><strong>${esc(prepared.scope)}</strong></div>${localFacts(prepared)}${privacyPreview(prepared.payload)}${configuredNote()}${ai.response ? resultHTML(prepared, ai.response) : `<button class="button primary ai-generate" data-ai-action="generate" ${ai.busy || !prepared.sourceRows.length ? 'disabled' : ''}>${icon('sparkles')}${ai.busy ? '正在生成解读…' : '发送脱敏数据，生成解读'}</button>${!prepared.sourceRows.length ? '<p class="ai-footnote">这个范围还没有记录，先记一笔再来分析。</p>' : ''}`}${ai.busy ? '<p class="ai-loading" role="status">正在等待 DeepSeek，请稍候。不会自动重试或修改账单。</p>' : ''}${sourceRows(prepared)}` : '<div class="ai-question-empty">先在本地确认查询范围，再决定是否发送脱敏汇总。</div>'}</div>`;
+    $('#ai-body').innerHTML = `<div class="ai-drawer-content"><div class="ai-privacy-strip">${icon('shield')}默认脱敏 · 原始账单留在本机<span>${state.mode === 'demo' ? '示例账本' : '我的账本'}</span></div><div class="ai-tabs" role="tablist" aria-label="财务助手功能"><button role="tab" aria-selected="${ai.tab === 'review'}" class="${ai.tab === 'review' ? 'active' : ''}" data-ai-action="tab-review">月度复盘</button><button role="tab" aria-selected="${ai.tab === 'question'}" class="${ai.tab === 'question' ? 'active' : ''}" data-ai-action="tab-question">问问账本</button></div>${ai.tab === 'question' ? `<div class="ai-question-box"><label for="ai-question">想了解哪些收支变化？</label><textarea id="ai-question" rows="3" maxlength="600" placeholder="我想知道平均每天的伙食支出">${esc(ai.question)}</textarea><div class="ai-shortcuts">${shortcuts.map((q, i) => `<button data-ai-shortcut="${i}">${q}</button>`).join('')}</div><div class="ai-question-bottom"><span>相对月份以 ${state.month} 为基准</span><button class="button secondary" data-ai-action="prepare" ${ai.busy ? 'disabled' : ''}>查看统计与脱敏预览</button></div></div>` : `<div class="ai-intro"><span class="eyebrow">YOUR MONTH, UNDERSTOOD</span><h3>${monthLabel(state.month)} · 财务复盘</h3><p>收入、支出、预算与消费分类，一起看看这个月的变化。</p></div>`}${ai.error ? `<p class="ai-error" role="alert">${esc(ai.error)}</p>` : ''}${prepared ? `${ai.tab === 'question' ? queryEditor(prepared) : ''}<div id="ai-prepared-content"><div class="ai-scope"><span>本次分析范围</span><strong>${esc(prepared.scope)}</strong></div>${localFacts(prepared)}${privacyPreview(prepared.payload)}${configuredNote()}${ai.response ? resultHTML(prepared, ai.response) : `<button class="button primary ai-generate" data-ai-action="generate" ${ai.busy || ai.filterDirty ? 'disabled' : ''}>${icon('sparkles')}${ai.busy ? '正在生成解读…' : '发送脱敏数据，生成解读'}</button>${!prepared.sourceRows.length ? '<p class="ai-footnote">当前条件未匹配到记录，统计值为零；可调整月份、分类或备注关键词。</p>' : ''}`}${ai.busy ? '<p class="ai-loading" role="status">正在等待 DeepSeek，请稍候。不会自动重试或修改账单。</p>' : ''}${sourceRows(prepared)}</div>` : '<div class="ai-question-empty">先在本地确认查询范围，再决定是否发送脱敏汇总。</div>'}</div>`;
   }
   function openAssistant(tabName) {
-    ai.tab = tabName; ai.error = ''; ai.response = null; ai.mode = state.mode;
+    ai.tab = tabName; ai.filterDirty = false; ai.error = ''; ai.response = null; ai.mode = state.mode;
     ai.prepared = tabName === 'review' ? P.packet(book(), state.month) : null;
     if (ai.prepared) ai.response = ai.cache.get(cacheKey(ai.prepared)) || null;
     renderAssistant(); assistant.showModal();
@@ -88,7 +95,7 @@
     return data;
   }
   async function generate(force = false) {
-    if (!ai.prepared || ai.busy) return;
+    if (!ai.prepared || ai.busy || ai.filterDirty) return;
     if (!ai.status?.configured) { openSettings(); return; }
     const prepared = ai.prepared, key = cacheKey(prepared), originalMode = state.mode;
     if (!force && ai.cache.has(key)) { ai.response = ai.cache.get(key); renderAssistant(); return; }
@@ -171,7 +178,7 @@
     }
     if (action === 'prepare') {
       ai.question = $('#ai-question').value; ai.error = ''; ai.response = null; ai.prepared = null;
-      try { const query = P.parseQuestion(ai.question, state.month); ai.prepared = P.packet(book(), state.month, query); ai.response = ai.cache.get(cacheKey(ai.prepared)) || null; }
+      try { ai.filterDirty = false; const query = P.parseQuestion(ai.question, state.month); ai.prepared = P.packet(book(), state.month, query); ai.response = ai.cache.get(cacheKey(ai.prepared)) || null; }
       catch (error) { ai.error = error.message; }
       renderAssistant();
     }
@@ -194,6 +201,12 @@
     }
   });
   document.addEventListener('input', event => {
+    if (event.target.closest('#ai-query-form')) {
+      ai.filterDirty = true; ai.response = null; ai.controller?.abort(); ai.controller = null; ai.busy = false;
+      const content = $('#ai-prepared-content');
+      if (content) content.innerHTML = '<p class="ai-footnote">条件已修改，请点击“应用条件，重新统计”后再发送。</p>';
+      return;
+    }
     if (event.target.id !== 'ai-question') return;
     ai.question = event.target.value; ai.prepared = null; ai.response = null;
     ai.controller?.abort(); ai.controller = null; ai.busy = false;
@@ -208,6 +221,23 @@
       ai.drafts[index].typeHint = type;
       row.querySelector('[data-draft-field="category"]').innerHTML = L.categories[type].map(c => `<option>${c}</option>`).join('');
     }
+  });
+  document.addEventListener('submit', event => {
+    if (event.target.id !== 'ai-query-form') return;
+    event.preventDefault();
+    try {
+      const form = new FormData(event.target);
+      const months = [...new Set(String(form.get('months')).split(/[,，、\s]+/).filter(Boolean))].sort().reverse();
+      if (!months.length || months.length > 24 || months.some(m => !L.validMonth(m))) throw Error('月份请填写 YYYY-MM，例如 2026-09，最多 24 个月。');
+      const selected = form.get('category');
+      const categories = selected === 'selected' ? ai.prepared.query.categories : selected === 'all' ? [] : [selected];
+      const bounds = ['lower', 'upper'].filter(key => form.get(key) !== '').map(key => ({ op: form.get(key + 'Op'), amount: Math.round(Number(form.get(key)) * 100) }));
+      if (bounds.some(b => !Number.isSafeInteger(b.amount) || b.amount < 0 || b.amount > 99999999999)) throw Error('请填写有效的金额范围。');
+      if (bounds.length === 2 && (bounds[0].amount > bounds[1].amount || bounds[0].amount === bounds[1].amount && (bounds[0].op === 'gt' || bounds[1].op === 'lt'))) throw Error('最低和最高金额之间没有可用范围，请调整。');
+      if (form.get('focus') === 'compare' && months.length !== 2) throw Error('两个月比较需要恰好选择两个月。');
+      const query = { months, categories, category: categories.length === 1 ? categories[0] : 'all', measure: form.get('measure'), focus: form.get('focus'), averageUnit: form.get('averageUnit'), noteKeyword: String(form.get('noteKeyword')).trim(), excludeRent: form.has('excludeRent'), bounds };
+      ai.prepared = P.packet(book(), state.month, query); ai.response = ai.cache.get(cacheKey(ai.prepared)) || null; ai.filterDirty = false; ai.error = ''; renderAssistant();
+    } catch (error) { $('#ai-query-error').textContent = error.message; }
   });
   $('#ai-settings-form').addEventListener('submit', async event => {
     event.preventDefault(); $('#ai-settings-error').textContent = ''; $('#ai-save-settings').disabled = true;

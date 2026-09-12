@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import shutil
+import subprocess
 from email.message import Message
 from types import SimpleNamespace
 import unittest
@@ -97,11 +99,59 @@ class PrivacyTests(unittest.TestCase):
         payload['data']['candidates'][0]['hints'] = ['张三午饭38元']
         with self.assertRaises(server.UserError): server.clean_request(payload)
 
+    def test_daily_context_accepts_only_anonymous_calendar_and_fixed_units(self):
+        data = fixture()
+        data['data'].update(focus='average', averageUnit='day', filtered=True)
+        data['data']['periods'][0]['days'] = 13
+        self.assertEqual(server.clean_request(data), data)
+        data['data']['periods'][0]['days'] = 0
+        with self.assertRaises(server.UserError): server.clean_request(data)
+        del data['data']['periods'][0]['days']
+        with self.assertRaises(server.UserError): server.clean_request(data)
+        data['data']['periods'][0]['days'] = 13
+        data['data']['averageUnit'] = '张三'
+        with self.assertRaises(server.UserError): server.clean_request(data)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node is required for frontend/backend contract coverage')
+    def test_frontend_questions_pass_backend_and_mocked_upstream_without_identifiers(self):
+        script = """
+const P = require('./dist/privacy.js');
+const book = { entries: [{ id: 'private-source-id', date: '2026-09-01', type: 'expense', category: '餐饮美食', amount: 13000, note: '合成商户张三 13812345678 example@example.com' }], budgets: {} };
+const questions = ['我想询问平均每天的伙食支出', '本月“合成商户张三”超过100元的支出有多少', '最近三个月伙食月均支出', '本月每笔平均支出'];
+process.stdout.write(JSON.stringify(questions.map(q => P.packet(book, '2026-09', P.parseQuestion(q, '2026-09'), '2026-09-13').payload)));
+"""
+        payloads = json.loads(subprocess.check_output(['node', '-e', script], cwd=Path(__file__).parents[1]))
+        for payload in payloads:
+            self.assertEqual(server.clean_request(payload), payload)
+            encoded = json.dumps(payload, ensure_ascii=False)
+            for private in ['合成商户张三', '13812345678', 'example@example.com', 'private-source-id', '2026-09', 'noteKeyword']:
+                self.assertNotIn(private, encoded)
+        self.assertEqual(payloads[0]['data']['facts'][0]['value'], 1000)
+        handler = self.handler(payloads[0])
+        replies = []
+        handler.reply = lambda data, status=200: replies.append((data, status))
+        with patch.object(server, 'call_deepseek', return_value={'result': {'summary': '日均伙食已按日历天数计算', 'insights': [], 'suggestions': []}}) as upstream:
+            handler.do_POST()
+        self.assertEqual(replies[0][1], 200)
+        upstream.assert_called_once_with(payloads[0])
+        self.assertIn('day日均', server.prompt_for(payloads[0]))
+
     def test_model_output_cannot_invent_facts_or_amounts(self):
         response = {'summary': '餐饮值得留意', 'insights': [{'factId': 'F0', 'explanation': '可核对日常消费。'}], 'suggestions': ['定期检查支出分类。']}
         self.assertEqual(server.validate_result(response, fixture()), response)
-        for invalid in [{'summary': '你花了99999元', 'insights': [], 'suggestions': []}, {'summary': '餐饮值得留意', 'insights': [{'factId': 'F99', 'explanation': '检查。'}], 'suggestions': []}]:
-            with self.assertRaises(server.UserError): server.validate_result(invalid, fixture())
+        grounded = {'summary': '餐饮净支出为38元。', 'insights': [{'factId': 'F0', 'explanation': 'P0收入100元，记录共2笔。'}], 'suggestions': ['可根据已记录金额安排预算。']}
+        self.assertEqual(server.validate_result(grounded, fixture()), grounded)
+        for unknown in ['你花了99999元', '净支出2元']:
+            filtered = server.validate_result({'summary': unknown, 'insights': [], 'suggestions': []}, fixture())
+            self.assertTrue(filtered['omittedNumericText'])
+            self.assertNotIn(unknown, json.dumps(filtered, ensure_ascii=False))
+        partial = server.validate_result({'summary': '餐饮支出38元', 'insights': [{'factId': 'F0', 'explanation': '日均99999元'}, {'factId': 'F0', 'explanation': '核对餐饮记录。'}], 'suggestions': ['每天省999元', '继续记录。']}, fixture())
+        self.assertEqual(partial['summary'], '餐饮支出38元')
+        self.assertEqual(len(partial['insights']), 1)
+        self.assertEqual(partial['suggestions'], ['继续记录。'])
+        self.assertTrue(partial['omittedNumericText'])
+        with self.assertRaises(server.UserError):
+            server.validate_result({'summary': '餐饮值得留意', 'insights': [{'factId': 'F99', 'explanation': '检查。'}], 'suggestions': []}, fixture())
 
     def test_key_stored_with_restrictive_permissions(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(server, 'CONFIG', Path(directory) / 'secret' / 'deepseek.json'), patch.dict(os.environ, {}, clear=True):
