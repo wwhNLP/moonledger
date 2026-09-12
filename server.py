@@ -11,12 +11,14 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import socket
 import threading
 import time
 import urllib.error
 import urllib.request
 from import_xlsx import read_xlsx
+from chat_bridge import ChatError, clean_request as clean_chat, stream_chat, cancel as cancel_chat, status as chat_status, stop_jobs as stop_chat_jobs
 
 ROOT = Path(__file__).resolve().parent
 CONFIG = ROOT / '.local' / 'deepseek.json'
@@ -344,6 +346,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if not self.allowed_host():
             return self.reply({'error': '仅允许本机访问。'}, 403)
+        if self.path == '/api/chat/status':
+            return self.reply(chat_status())
         if self.path == '/api/status':
             try:
                 key, model, source = read_config()
@@ -352,7 +356,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.reply({'error': error.message, 'code': error.code, 'csrfToken': CSRF_TOKEN}, error.status)
         if self.path.startswith('/api/'):
             return self.reply({'error': '接口不存在。'}, 404)
-        if self.path.split('?')[0] not in ['/', '/index.html', '/styles.css', '/ledger.js', '/app.js', '/privacy.js', '/ai.js', '/ai.css', '/features-core.js', '/features-ui.js', '/features.css']:
+        if self.path.split('?')[0] not in ['/', '/index.html', '/styles.css', '/ledger.js', '/app.js', '/privacy.js', '/ai.js', '/ai.css', '/features-core.js', '/features-ui.js', '/features.css', '/chat-core.js', '/chat.js', '/chat.css']:
             return self.reply({'error': '文件不存在。'}, 404)
         super().do_GET()
 
@@ -373,7 +377,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 length = int(self.headers.get('Content-Length', '0'))
             except ValueError:
                 raise UserError('请求大小无效。')
-            if length <= 0 or length > (14_500_000 if self.path == '/api/import-xlsx' else 100_000):
+            if length <= 0 or length > (14_500_000 if self.path == '/api/import-xlsx' else 2_000_000 if self.path == '/api/chat' else 100_000):
                 raise UserError('请求过大或为空。', 413)
             self.connection.settimeout(10)
             try:
@@ -384,6 +388,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 save_config(raw)
                 key, model, source = read_config()
                 return self.reply({'configured': bool(key), 'model': model, 'source': source})
+            if self.path == '/api/chat/cancel':
+                exact_keys(raw, ['requestId'])
+                if not isinstance(raw['requestId'], str):
+                    raise ChatError('请求编号无效。')
+                return self.reply({'cancelled': cancel_chat(raw['requestId'])})
+            if self.path == '/api/chat':
+                request = clean_chat(raw)
+                events = stream_chat(request)
+                try:
+                    first = next(events)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/x-ndjson; charset=utf-8')
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    self.close_connection = True
+                    def emit(event):
+                        self.wfile.write((json.dumps(event, ensure_ascii=False) + '\n').encode('utf-8'))
+                        self.wfile.flush()
+                    emit(first)
+                    try:
+                        for event in events:
+                            emit(event)
+                    except ChatError as error:
+                        emit({'type': 'error', 'error': error.message, 'code': error.code})
+                    except Exception:
+                        emit({'type': 'error', 'error': '对话连接异常，请重试。', 'code': 'CHAT_ERROR'})
+                except (BrokenPipeError, ConnectionResetError, socket.timeout):
+                    pass
+                finally:
+                    events.close()
+                return
             if self.path == '/api/import-xlsx':
                 exact_keys(raw, ['file'])
                 if not isinstance(raw['file'], str):
@@ -396,7 +431,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if self.path == '/api/ai':
                 return self.reply(call_deepseek(clean_request(raw)))
             raise UserError('接口不存在。', 404)
-        except UserError as error:
+        except (UserError, ChatError) as error:
             self.reply({'error': error.message, 'code': error.code}, error.status)
         except Exception:
             self.reply({'error': '本地服务处理失败。未修改账本，请重试。', 'code': 'LOCAL_ERROR'}, 500)
@@ -406,6 +441,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=4173)
     args = parser.parse_args()
+    def terminate(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, terminate)
     server = http.server.ThreadingHTTPServer(('127.0.0.1', args.port), functools.partial(Handler, directory=str(ROOT / 'dist')))
     server.daemon_threads = True
     print(f'月见已启动：http://127.0.0.1:{args.port}', flush=True)
@@ -415,6 +453,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        stop_chat_jobs()
         server.server_close()
 
 

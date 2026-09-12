@@ -1,5 +1,8 @@
 # Local credentials and configuration
 .local/
+.pi/
+sessions/
+*.jsonl
 .env
 .env.*
 *.pem
