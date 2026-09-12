@@ -1,0 +1,31 @@
+# Local credentials and configuration
+.local/
+.env
+.env.*
+*.pem
+*.key
+
+# Personal imports, exports and backups (never publish real ledger data)
+imports/
+exports/
+backups/
+data/
+*.csv
+*.xlsx
+*.xls
+*.sqlite*
+*.db
+月见-*.json
+月见-*恢复*.txt
+月见-恢复前原始数据.txt
+
+# Local runtime and editor artifacts
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+.DS_Store
+.idea/
+.vscode/
+.sites-runtime/

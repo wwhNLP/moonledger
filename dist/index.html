@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#153d32">
+  <meta name="description" content="月见，一本留在你设备上的个人收支账本。按月查看收支、消费分类与预算。">
+  <title>月见 · 个人收支账本</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23153d32'/%3E%3Cpath d='M43 15A21 21 0 1 0 49 43 18 18 0 0 1 43 15' fill='%23d8edac'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="ai.css">
+  <link rel="stylesheet" href="features.css">
+  <script src="ledger.js" defer></script>
+  <script src="features-core.js" defer></script>
+  <script src="app.js" defer></script>
+  <script src="privacy.js" defer></script>
+  <script src="ai.js" defer></script>
+  <script src="features-ui.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#overview" aria-label="月见首页"><span class="brand-symbol">◔</span><span>月见<small>MOONLEDGER</small></span></a>
+    <div class="workspace-label">个人财务空间</div>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-view="overview"><span data-icon="grid"></span>收支概览</button>
+      <button class="nav-item" data-view="transactions"><span data-icon="list"></span>账单明细<span id="nav-count" class="nav-count"></span></button>
+      <button class="nav-item" data-view="analysis"><span data-icon="chart"></span>消费分析</button>
+      <button class="nav-item" data-view="budget"><span data-icon="wallet"></span>月度预算</button>
+      <button class="nav-item extra-nav" data-view="calendar"><span data-icon="grid"></span>消费日历</button>
+      <button class="nav-item extra-nav" data-view="annual"><span data-icon="chart"></span>年度总览</button>
+      <button class="nav-item" data-view="tools" aria-label="账本工具"><span data-icon="briefcase"></span><span class="tools-nav-label">账本工具</span></button>
+    </nav>
+    <div class="sidebar-bottom">
+      <div class="privacy-card"><span data-icon="shield"></span><strong>只属于你的账本</strong><p>数据保存在当前浏览器<br>每一笔，都安心记录。</p></div>
+      <button class="nav-item ai-settings-nav" data-ai-action="settings"><span data-icon="sparkles"></span>AI 设置</button>
+      <button class="nav-item" id="data-button"><span data-icon="database"></span>数据与备份</button>
+      <div class="profile"><span class="avatar">我</span><span><strong>我的财务空间</strong><small>本地存储 · 无需登录</small></span><span class="profile-lock" data-icon="lock"></span></div>
+    </div>
+  </aside>
+  <div class="app-shell">
+    <header class="topbar"><div class="breadcrumb">我的账本<span>/</span><strong id="breadcrumb-title">收支概览</strong></div><div class="topbar-right"><span class="local-label"><span data-icon="shield"></span> 本地保存</span><button class="ai-launcher" data-ai-action="open" aria-label="打开 AI 财务助手"><span data-icon="sparkles"></span><span class="ai-action-text">问问账本</span></button><button id="book-switch" class="book-switch">示例账本 <span data-icon="chevronDown"></span></button><button class="mobile-data icon-button" data-action="data-button" aria-label="数据与备份"><span data-icon="database"></span></button><span class="small-avatar">我</span></div></header>
+    <main id="main">
+      <section class="page-heading"><div><div class="eyebrow">A LITTLE CLARITY, EVERY MONTH</div><h1 id="page-title">每个月，都心中有数<span class="heading-dot">.</span></h1><p id="page-subtitle">看看钱从哪里来，又花在了哪里。</p></div><div class="page-actions"><div class="month-picker"><button id="previous-month" aria-label="上个月"><span data-icon="chevronLeft"></span></button><label for="selected-month" class="sr-only">选择月份</label><input type="month" id="selected-month"><button id="next-month" aria-label="下个月"><span data-icon="chevronRight"></span></button></div><button class="button primary" id="add-button"><span data-icon="plus"></span>记一笔</button></div></section>
+      <div id="demo-banner" class="demo-banner"><span><span class="demo-pill">示例模式</span>先用一份示例，认识你的月度财务看板。</span><button id="start-own">开始我的账本 <span data-icon="arrowRight"></span></button></div>
+      <div id="view-content"></div>
+      <footer class="page-footer"><span>月见 MOONLEDGER <span class="footer-separator">/</span> 把生活过成喜欢的样子</span><span id="save-status">数据仅保存在此浏览器</span></footer>
+    </main>
+  </div>
+  <dialog id="entry-dialog" aria-labelledby="entry-title"><form id="entry-form"><div class="dialog-heading"><div><span class="eyebrow">KEEP A LITTLE RECORD</span><h2 id="entry-title">记一笔</h2></div><button type="button" class="icon-button close-dialog" aria-label="关闭"><span data-icon="x"></span></button></div><button class="smart-entry-bridge" type="button" data-ai-action="smart"><span data-icon="sparkles"></span><span>一句话，记下几笔日常</span><span data-icon="chevronRight"></span></button><input type="hidden" id="entry-id"><div class="type-toggle"><label><input type="radio" name="type" value="expense" checked><span>支出</span></label><label><input type="radio" name="type" value="income"><span>收入</span></label></div><label class="field amount-field">金额（元）<div><span>¥</span><input id="entry-amount" type="number" min="0.01" max="999999999.99" step="0.01" placeholder="0.00" required inputmode="decimal"></div></label><div class="form-grid"><label class="field">分类<select id="entry-category" required></select></label><label class="field">日期<input id="entry-date" type="date" required min="1900-01-01" max="2100-12-31"></label></div><label class="field">备注<input id="entry-note" maxlength="100" placeholder="例如：和朋友的一顿晚餐"></label><p id="entry-error" class="form-error" role="alert"></p><div class="dialog-footer"><button type="button" class="button secondary close-dialog">取消</button><button type="submit" class="button primary">保存账单</button></div></form></dialog>
+  <dialog id="data-dialog" aria-labelledby="data-title"><div class="dialog-heading"><div><span class="eyebrow">YOUR DATA, YOUR CONTROL</span><h2 id="data-title">数据与备份</h2></div><button class="icon-button close-dialog" aria-label="关闭"><span data-icon="x"></span></button></div><p class="dialog-description">账本只保存在当前浏览器。定期导出备份，换设备或清除浏览器数据后也能找回来。</p><div id="data-context" class="info-note"></div><div class="data-action"><div><strong>完整账本备份</strong><p>包含所有月份的账单、预算与固定模板（JSON）</p></div><button id="export-json" class="button secondary">导出备份</button></div><div class="data-action"><div><strong>当前月份账单</strong><p>CSV 格式，可用 Excel 打开</p></div><button id="export-csv" class="button secondary">导出 CSV</button></div><details id="export-fallback" hidden><summary>下载未开始？使用备用保存方式</summary><p>复制以下内容，用文本编辑器保存为 <strong id="export-filename"></strong>（UTF-8 编码）。</p><textarea id="export-content" aria-label="导出的文件内容" readonly spellcheck="false"></textarea><button id="copy-export" class="button secondary">复制文件内容</button></details><div class="import-area"><span data-icon="upload"></span><strong>导入账单或恢复备份</strong><p>支持月见 JSON 备份、标准 CSV 账单</p><button id="choose-import" class="button secondary">选择文件</button><input type="file" id="import-file" accept=".json,.csv,application/json,text/csv" hidden><button id="download-template" class="text-button">下载 CSV 模板</button></div><p class="import-hint">CSV 列：日期、类型、分类、金额、备注。类型填写“收入”或“支出”；金额为大于 0、最多两位小数的数字。</p><div id="import-preview" hidden></div><p id="import-error" class="form-error" role="alert"></p><div class="danger-zone"><span>清空当前账本的账单、预算与固定模板</span><button id="clear-book" class="text-button danger-text">清空账本</button></div></dialog>
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-heading"><h2 id="confirm-title">确认操作</h2><button class="icon-button close-dialog" aria-label="关闭"><span data-icon="x"></span></button></div><p id="confirm-message" class="dialog-description"></p><div class="dialog-footer"><button class="button secondary close-dialog">取消</button><button id="confirm-action" class="button primary">确认</button></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
