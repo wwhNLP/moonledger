@@ -72,3 +72,7 @@ python3 -B -m unittest discover -s tests -p 'test_*.py'
 测试覆盖账本计算、跨月回款、关联金额上限、模板日期与防重复、分类预算、年度汇总、支付账单识别与来源去重、XLSX 日期／长编号／公式／大小限制、备份往返、脱敏白名单、并发合并、密钥权限、请求来源保护和模拟 DeepSeek 响应。模拟测试不使用真实 Key，也不产生 API 费用；真实模型效果需配置自己的 Key 后验证。
 
 源码在 `dist`，使用原生 HTML/CSS/JavaScript，无安装和构建步骤。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)，Copyright (c) 2026 wwhNLP。
