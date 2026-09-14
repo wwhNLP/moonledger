@@ -257,6 +257,8 @@ def stream_chat(request, executable=None, timeout=TIMEOUT):
                         if text_length > MAX_REPLY:
                             raise ChatError('回复过长，请缩小问题范围后重试。')
                         yield {'type': 'delta', 'text': delta['delta']}
+                    if delta.get('type') in ['thinking_delta', 'reasoning_delta'] and isinstance(delta.get('delta'), str):
+                        yield {'type': 'thinking_delta', 'text': delta['delta']}
                 if event.get('type') == 'message_end' and event.get('message', {}).get('role') == 'assistant':
                     final = event['message']
             if not final or final.get('stopReason') in ['error', 'aborted']:

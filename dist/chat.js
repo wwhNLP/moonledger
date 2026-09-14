@@ -22,7 +22,8 @@
     });
   }
   function rowHTML(row, i) {
-    return `<article class="chat-message ${row.role}" data-chat-row="${i}"><div class="chat-speaker">${row.role === 'user' ? '你' : 'Pi'}${row.scope ? ` <span>${esc(row.scope)}</span>` : ''}</div><div class="chat-message-text">${row.content ? plain(row.content) : row.failed ? '未生成回复。' : '<span class="chat-thinking">正在思考…</span>'}</div>${row.failed ? '<small class="chat-failed">本轮未完成，不会加入后续上下文。</small>' : ''}</article>`;
+    const thinking = row.thinking ? `<details class="chat-thinking-details"><summary>查看思考过程</summary><div>${plain(row.thinking)}</div></details>` : '';
+    return `<article class="chat-message ${row.role}" data-chat-row="${i}"><div class="chat-speaker">${row.role === 'user' ? '你' : 'Pi'}${row.scope ? ` <span>${esc(row.scope)}</span>` : ''}</div>${thinking}<div class="chat-message-text">${row.content ? plain(row.content) : row.failed ? '未生成回复。' : '<span class="chat-thinking">正在思考…</span>'}</div>${row.failed ? '<small class="chat-failed">本轮未完成，不会加入后续上下文。</small>' : ''}</article>`;
   }
   async function refreshStatus() {
     try { const response = await fetch('/api/chat/status', { cache: 'no-store' }); chat.status = await response.json(); if (!response.ok) chat.status = { available: false }; }
@@ -31,9 +32,10 @@
   }
   function updateReply(row) {
     if (!host?.isConnected) return;
-    const index = chat.rows.indexOf(row), node = host.querySelector(`[data-chat-row="${index}"] .chat-message-text`);
+    const index = chat.rows.indexOf(row), article = host.querySelector(`[data-chat-row="${index}"]`), node = article?.querySelector('.chat-message-text');
     const dialog = host.closest('dialog'), follow = dialog && dialog.scrollHeight - dialog.scrollTop - dialog.clientHeight < 160;
     if (node) node.innerHTML = row.content ? plain(row.content) : '<span class="chat-thinking">正在思考…</span>';
+    if (article) { let details = article.querySelector('.chat-thinking-details'); if (row.thinking && !details) { details = document.createElement('details'); details.className = 'chat-thinking-details'; details.innerHTML = '<summary>查看思考过程</summary><div></div>'; article.insertBefore(details, node); } if (details) details.querySelector('div').innerHTML = plain(row.thinking || ''); }
     if (follow) dialog.scrollTop = dialog.scrollHeight;
   }
   async function stop() {
@@ -76,6 +78,7 @@
         const event = JSON.parse(line);
         if (generation !== chat.generation) return;
         if (event.type === 'delta') { answerRow.content += event.text; updateReply(answerRow); }
+        if (event.type === 'thinking_delta') { answerRow.thinking = (answerRow.thinking || '') + event.text; updateReply(answerRow); }
         if (event.type === 'error') throw Error(event.error || 'Pi 回复失败。');
         if (event.type === 'cancelled') throw Error('已停止生成。');
         if (event.type === 'done') { answerRow.content = event.text; chat.model = [event.provider, event.model].filter(Boolean).join(' / '); completed = true; updateReply(answerRow); }
